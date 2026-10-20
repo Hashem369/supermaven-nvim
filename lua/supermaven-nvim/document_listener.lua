@@ -22,21 +22,14 @@ M.setup = function()
   })
 
   vim.api.nvim_create_autocmd({ "BufEnter" }, {
+    group = M.augroup,
     callback = function(_)
       local ok, api = pcall(require, "supermaven-nvim.api")
       if not ok then
         return
       end
-      if config.condition() or vim.g.SUPERMAVEN_DISABLED == 1 then
-        if api.is_running() then
-          api.stop()
-          return
-        end
-      else
-        if api.is_running() then
-          return
-        end
-        api.start()
+      if config.condition() and api.is_enabled() then
+        api.stop()
       end
     end,
   })

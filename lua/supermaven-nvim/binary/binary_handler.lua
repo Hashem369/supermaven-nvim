@@ -17,6 +17,7 @@ local BinaryLifecycle = {
   cursor = nil,
   max_state_id_retention = 50,
   service_message_displayed = false,
+  enabled = false,
   changed_document_list = {},
   last_state = nil,
   dust_strings = {},
@@ -36,25 +37,61 @@ timer:start(
 )
 
 function BinaryLifecycle:start_binary()
-  self.stdin = loop.new_pipe(false)
-  self.stdout = loop.new_pipe(false)
-  self.stderr = loop.new_pipe(false)
+  if self.handle ~= nil then
+    if self.handle:is_active() then
+      return
+    end
+    if not self.handle:is_closing() then
+      self.handle:close()
+    end
+    self.handle = nil
+  end
+
+  local stdin = loop.new_pipe(false)
+  local stdout = loop.new_pipe(false)
+  local stderr = loop.new_pipe(false)
+  self.stdin = stdin
+  self.stdout = stdout
+  self.stderr = stderr
   self.last_text = nil
   self.last_path = nil
   self.last_context = nil
   self.wants_polling = false
-  self.handle = loop.spawn(binary_path, {
+  local handle
+  handle = loop.spawn(binary_path, {
     args = {
       "stdio",
     },
-    stdio = { self.stdin, self.stdout, self.stderr },
+    stdio = { stdin, stdout, stderr },
   }, function(code, signal)
     log:debug("sm-agent exited with code " .. code)
-    self.handle:close()
-    self.handle = nil
+    if not handle:is_closing() then
+      handle:close()
+    end
+    if self.handle == handle then
+      self.handle = nil
+    end
+    for _, stream in ipairs({ stdin, stdout, stderr }) do
+      if not stream:is_closing() then
+        stream:close()
+      end
+    end
+    if self.stdin == stdin then
+      self.stdin = nil
+      self.stdout = nil
+      self.stderr = nil
+    end
   end)
-  if not self.handle then
-    log:debug("Starting binary")
+  self.handle = handle
+  if handle == nil then
+    log:error("Failed to start sm-agent.")
+    stdin:close()
+    stdout:close()
+    stderr:close()
+    self.stdin = nil
+    self.stdout = nil
+    self.stderr = nil
+    return
   end
   self:read_loop()
   self:greeting_message()
@@ -65,11 +102,24 @@ function BinaryLifecycle:is_running()
 end
 
 function BinaryLifecycle:stop_binary()
-  if self:is_running() then
-    self.handle:kill(loop.constants.SIGTERM)
-    self.handle:close()
+  self.wants_polling = false
+  if self.handle ~= nil then
+    if self.handle:is_active() then
+      self.handle:kill(loop.constants.SIGTERM)
+    end
+    if not self.handle:is_closing() then
+      self.handle:close()
+    end
     self.handle = nil
   end
+  for _, stream in ipairs({ self.stdin, self.stdout, self.stderr }) do
+    if stream ~= nil and not stream:is_closing() then
+      stream:close()
+    end
+  end
+  self.stdin = nil
+  self.stdout = nil
+  self.stderr = nil
 end
 
 function BinaryLifecycle:greeting_message()
@@ -81,6 +131,9 @@ end
 ---@param file_name string
 ---@param event_type "text_changed" | "cursor"
 function BinaryLifecycle:on_update(buffer, file_name, event_type)
+  if not self.enabled then
+    return
+  end
   if config.ignore_filetypes[vim.bo.ft] or vim.tbl_contains(config.ignore_filetypes, vim.bo.filetype) then
     return
   end
@@ -111,12 +164,18 @@ function BinaryLifecycle:on_update(buffer, file_name, event_type)
 end
 
 function BinaryLifecycle:check_process()
+  if not self.enabled then
+    return false
+  end
   if self.handle ~= nil and self.handle:is_active() then
     return true
   end
 
   if self.handle ~= nil then
-    self.handle:close()
+    if not self.handle:is_closing() then
+      self.handle:close()
+    end
+    self.handle = nil
   end
 
   self:start_binary()
@@ -136,6 +195,9 @@ function BinaryLifecycle:read_loop()
   local stdout = self.stdout
   local buffer = ""
   loop.read_start(stdout, function(err, data)
+    if not self.enabled then
+      return
+    end
     if err then
       self:on_error(err)
       return
@@ -232,6 +294,9 @@ function BinaryLifecycle:update_metadata(metadata_message)
 end
 
 function BinaryLifecycle:on_error(err)
+  if not self.enabled then
+    return
+  end
   require("supermaven-nvim.api").stop()
   log:error("Error reading stdout: " .. err)
 end
@@ -268,6 +333,10 @@ function BinaryLifecycle:provide_inline_completion_items(buffer, cursor, context
 end
 
 function BinaryLifecycle:poll_once()
+  if not self.enabled then
+    self.wants_polling = false
+    return
+  end
   if config.ignore_filetypes[vim.bo.ft] or vim.tbl_contains(config.ignore_filetypes, vim.bo.filetype) then
     return
   end

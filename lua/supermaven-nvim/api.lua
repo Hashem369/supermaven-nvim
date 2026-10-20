@@ -2,6 +2,7 @@ local binary = require("supermaven-nvim.binary.binary_handler")
 local listener = require("supermaven-nvim.document_listener")
 local log = require("supermaven-nvim.logger")
 local u = require("supermaven-nvim.util")
+local config = require("supermaven-nvim.config")
 
 local loop = u.uv
 
@@ -11,7 +12,19 @@ M.is_running = function()
   return binary:is_running()
 end
 
+M.is_enabled = function()
+  return binary.enabled
+end
+
 M.start = function()
+  if config.condition() then
+    log:warn("Supermaven is disabled by the configured condition.")
+    if binary.enabled or M.is_running() then
+      M.stop()
+    end
+    return
+  end
+
   if M.is_running() then
     log:warn("Supermaven is already running.")
     return
@@ -19,20 +32,22 @@ M.start = function()
     log:trace("Starting Supermaven...")
   end
   vim.g.SUPERMAVEN_DISABLED = 0
+  binary.enabled = true
   binary:start_binary()
   listener.setup()
 end
 
 M.stop = function()
   vim.g.SUPERMAVEN_DISABLED = 1
-  if not M.is_running() then
+  if not binary.enabled and not M.is_running() then
     log:warn("Supermaven is not running.")
-    return
   else
     log:trace("Stopping Supermaven...")
   end
+  binary.enabled = false
   listener.teardown()
   binary:stop_binary()
+  require("supermaven-nvim.completion_preview"):dispose_inlay()
 end
 
 M.restart = function()
@@ -43,7 +58,7 @@ M.restart = function()
 end
 
 M.toggle = function()
-  if M.is_running() then
+  if binary.enabled or M.is_running() then
     M.stop()
   else
     M.start()

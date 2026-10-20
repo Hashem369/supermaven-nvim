@@ -52,7 +52,6 @@ M.setup = function(args)
     end
   end
 
-  api.start()
 end
 
 return M
