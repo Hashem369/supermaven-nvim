@@ -47,13 +47,10 @@ function BinaryLifecycle:start_binary()
     args = {
       "stdio",
     },
-    detached = true,
     stdio = { self.stdin, self.stdout, self.stderr },
   }, function(code, signal)
     log:debug("sm-agent exited with code " .. code)
-    if self.handle ~= nil and self.handle.close then
-      self.handle:close()
-    end
+    self.handle:close()
     self.handle = nil
   end)
   if not self.handle then
@@ -68,90 +65,11 @@ function BinaryLifecycle:is_running()
 end
 
 function BinaryLifecycle:stop_binary()
-  if self.handle == nil then
-    self.wants_polling = false
-    self.state_map = {}
-    self.current_state_id = 0
-    self.last_state = nil
-    self.changed_document_list = {}
-    return
-  end
-
-  local pid = self.handle.pid
-  local was_active = self.handle:is_active()
-
-  if was_active then
-    if vim.fn.has("win32") == 1 then
-      vim.fn.system({
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        string.format("Stop-Process -Id %d -Force -ErrorAction SilentlyContinue", pid),
-      })
-    else
-      local signal = loop.constants.SIGTERM
-      if pid ~= nil then
-        local ok = pcall(function()
-          os.execute("kill -TERM -- -" .. tostring(pid) .. " >/dev/null 2>&1 || kill -TERM " .. tostring(pid) .. " >/dev/null 2>&1")
-        end)
-        if not ok then
-          self.handle:kill(signal)
-        end
-      else
-        self.handle:kill(signal)
-      end
-    end
-
-    local tries = 0
-    while tries < 20 and self.handle ~= nil and self.handle:is_active() do
-      loop.sleep(50)
-      tries = tries + 1
-    end
-
-    if self.handle ~= nil and self.handle:is_active() then
-      if vim.fn.has("win32") == 1 then
-        vim.fn.system({
-          "powershell",
-          "-NoProfile",
-          "-Command",
-          string.format("Stop-Process -Id %d -Force -ErrorAction SilentlyContinue", pid),
-        })
-      else
-        if pid ~= nil then
-          pcall(function()
-            os.execute("kill -KILL -- -" .. tostring(pid) .. " >/dev/null 2>&1 || kill -KILL " .. tostring(pid) .. " >/dev/null 2>&1")
-          end)
-        end
-      end
-    end
-  end
-
-  if self.handle ~= nil and self.handle.close then
+  if self:is_running() then
+    self.handle:kill(loop.constants.SIGTERM)
     self.handle:close()
+    self.handle = nil
   end
-  self.handle = nil
-
-  if self.stdin ~= nil and self.stdin.close then
-    self.stdin:close()
-  end
-  if self.stdout ~= nil and self.stdout.close then
-    self.stdout:close()
-  end
-  if self.stderr ~= nil and self.stderr.close then
-    self.stderr:close()
-  end
-  self.stdin = nil
-  self.stdout = nil
-  self.stderr = nil
-  self.wants_polling = false
-  self.state_map = {}
-  self.current_state_id = 0
-  self.last_state = nil
-  self.changed_document_list = {}
-  self.last_provide_time = 0
-
-  preview:dispose_inlay()
-  self:close_popup()
 end
 
 function BinaryLifecycle:greeting_message()
