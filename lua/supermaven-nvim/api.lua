@@ -25,12 +25,11 @@ M.start = function()
     return
   end
 
-  if M.is_running() then
+  if binary.enabled and M.is_running() then
     log:warn("Supermaven is already running.")
     return
-  else
-    log:trace("Starting Supermaven...")
   end
+  log:trace("Starting Supermaven...")
   vim.g.SUPERMAVEN_DISABLED = 0
   binary.enabled = true
   binary:start_binary()
@@ -58,7 +57,7 @@ M.restart = function()
 end
 
 M.toggle = function()
-  if binary.enabled or M.is_running() then
+  if binary.enabled then
     M.stop()
   else
     M.start()

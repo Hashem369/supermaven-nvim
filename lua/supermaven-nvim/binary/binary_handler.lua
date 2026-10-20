@@ -18,6 +18,7 @@ local BinaryLifecycle = {
   max_state_id_retention = 50,
   service_message_displayed = false,
   enabled = false,
+  stopping = false,
   changed_document_list = {},
   last_state = nil,
   dust_strings = {},
@@ -38,13 +39,8 @@ timer:start(
 
 function BinaryLifecycle:start_binary()
   if self.handle ~= nil then
-    if self.handle:is_active() then
-      return
-    end
-    if not self.handle:is_closing() then
-      self.handle:close()
-    end
-    self.handle = nil
+    self.restart_when_stopped = self.enabled
+    return
   end
 
   local stdin = loop.new_pipe(false)
@@ -57,6 +53,8 @@ function BinaryLifecycle:start_binary()
   self.last_path = nil
   self.last_context = nil
   self.wants_polling = false
+  self.stopping = false
+  self.restart_when_stopped = false
   local handle
   handle = loop.spawn(binary_path, {
     args = {
@@ -81,6 +79,15 @@ function BinaryLifecycle:start_binary()
       self.stdout = nil
       self.stderr = nil
     end
+    self.stopping = false
+    if self.enabled and self.restart_when_stopped then
+      self.restart_when_stopped = false
+      vim.schedule(function()
+        if self.enabled and self.handle == nil then
+          self:start_binary()
+        end
+      end)
+    end
   end)
   self.handle = handle
   if handle == nil then
@@ -103,14 +110,20 @@ end
 
 function BinaryLifecycle:stop_binary()
   self.wants_polling = false
-  if self.handle ~= nil then
-    if self.handle:is_active() then
-      self.handle:kill(loop.constants.SIGTERM)
+  self.restart_when_stopped = false
+  local handle = self.handle
+  if handle ~= nil and handle:is_active() then
+    self.stopping = true
+    local killed, err = handle:kill(loop.constants.SIGKILL)
+    if not killed then
+      log:error("Failed to kill sm-agent: " .. tostring(err))
     end
-    if not self.handle:is_closing() then
-      self.handle:close()
+  elseif handle ~= nil then
+    if not handle:is_closing() then
+      handle:close()
     end
     self.handle = nil
+    self.stopping = false
   end
   for _, stream in ipairs({ self.stdin, self.stdout, self.stderr }) do
     if stream ~= nil and not stream:is_closing() then
